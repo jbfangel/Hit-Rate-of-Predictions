@@ -14,7 +14,7 @@ Project folder: `~/Desktop/Projects/Hit Rate of Predictions/`
 
 ## Tech Stack
 - **Language:** Python
-- **Scraping:** Playwright (handles JS-rendered pages)
+- **Scraping:** Playwright / Patchright (handles JS-rendered pages; patchright used for PCS to bypass Cloudflare)
 - **Data storage:** CSV or SQLite (to be decided)
 - **Dashboard:** Streamlit (simplest Python dashboard)
 
@@ -77,10 +77,10 @@ CREATE TABLE predictions (
 </details>
 
 ### Phase 2 — Results matching
-Use Playwright to search DuckDuckGo/Google for actual race results for every prediction in the DB. The script is source-agnostic — it processes any row where `actual_winner IS NULL`, so it works now against the 368 TV2 predictions and again after Phase 4 adds Feltet predictions. No new dependencies beyond Playwright.
+Use **patchright** (drop-in Playwright replacement that bypasses Cloudflare JS challenges) to scrape ProCyclingStats race result pages directly. The script is source-agnostic — it processes any row where `actual_winner IS NULL`, so it works now against the TV2 predictions and again after Phase 4 adds Feltet predictions.
 
-1. For each unmatched row, build a search query from `race_name` + year extracted from `date`
-2. Use Playwright to search DuckDuckGo/Google, parse the winner from the top result
+1. For each unmatched row, construct the PCS URL from a stored `pcs_url` column (or a `race_overrides.json` mapping)
+2. Use patchright to load the page and extract the winner from the results table
 3. Fuzzy-match the winner name against `predicted_winner`, mark `correct`
 4. Print loud warnings for any row where no result is found
 
@@ -91,16 +91,14 @@ Use Playwright to search DuckDuckGo/Google for actual race results for every pre
 - Emil predicts: one-day race winners, stage race GC winners, and jersey winners (points/KOM/youth)
 - Script is re-runnable at any time — only processes rows where `actual_winner IS NULL` (idempotent)
 - Same script handles TV2 predictions now and Feltet predictions later
+- Requires patchright (`pip install patchright && patchright install chromium`) — PCS blocks plain Playwright with Cloudflare
 
-#### Search Strategy
-Build a query per row, e.g.:
-- `"Paris-Roubaix 2024 winner"` for one-day races
-- `"Tour de France 2024 GC winner"` for stage race GC
-- Danish race names may need translating — try Danish query first, fall back to English if no confident result
-
-**Search options (choose one):**
-- **Playwright + Google/DuckDuckGo** — no API key needed, same tool already used in project
-- **SerpAPI / similar** — cleaner but adds a paid dependency
+#### Scraping Strategy
+Go directly to the ProCyclingStats result page for each race:
+- URL pattern: `https://www.procyclingstats.com/race/[slug]/[year]/[result|gc|…]`
+- Uses **patchright** (not plain Playwright) to bypass Cloudflare bot protection
+- Installed via: `pip install patchright && patchright install chromium`
+- Import: `from patchright.sync_api import sync_playwright` — no other code changes vs Playwright
 
 #### Schema Update
 Add two columns to `predictions`:
