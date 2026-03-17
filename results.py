@@ -31,21 +31,19 @@ USER_AGENT = (
     "Chrome/122.0.0.0 Safari/537.36"
 )
 
-WINNER_SELECTORS = [
-    "table.results tbody tr:first-child td.gc_winner a",
-    "table.results tbody tr:first-child a",
-    ".result-cont tr:first-child a",
-    "ul.result-cont li:first-child a",
-]
 
 SLUG_OVERRIDES = {
-    "Ename Samyn Classic":                          "ename-classic-samyn",
-    "Vuelta a Andalucia Ruta Ciclista del Sol":     "vuelta-a-andalucia",
+    "Ename Samyn Classic":                          "gp-samyn",
+    "Kuurne-Bruxelles-Kuurne":                      "kuurne-brussel-kuurne",
+    "Omloop Nieuwsblad":                            "omloop-het-nieuwsblad",
+    "Etoile de Bessèges – Tour du Gard":            "etoile-de-besseges",
+    "Giro della Sardegna":                          "giro-di-sardegna",
+    "Vuelta a Andalucia Ruta Ciclista del Sol":     "ruta-del-sol",
     "Volta ao Algarve em Bicicleta":                "volta-ao-algarve",
     "Vuelta a la Region de Murcia Costa Calida":    "vuelta-a-murcia",
     "CIC Tour de la Provence":                      "tour-de-la-provence",
-    "Faun Drome Classic":                           "drome-classic",
-    "Faun-Ardèche Classic":                         "ardeche-classic",
+    "Faun Drome Classic":                           "la-drome-classic",
+    "Faun-Ardèche Classic":                         "faun-ardeche-classic",
     "Classic Var":                                  "classic-var",
     "Tour des Alpes-Maritimes":                     "tour-des-alpes-maritimes-et-du-var",
     "Figueira Champions Classic":                   "figueira-champions-classic",
@@ -143,14 +141,121 @@ def build_pcs_url(race_name: str, date: str) -> tuple[str | None, str | None]:
     return f"{BASE}/{slug}/{year}", slug
 
 
+def build_url_from_slug(race_name: str, slug: str, year: str) -> str:
+    """Reconstruct a PCS URL given a slug, preserving stage/prologue suffix."""
+    m = re.match(r"(\d+)\. etape af .+", race_name, re.IGNORECASE)
+    if m:
+        return f"{BASE}/{slug}/{year}/stage-{m.group(1)}"
+    if re.match(r"prologen til .+", race_name, re.IGNORECASE):
+        return f"{BASE}/{slug}/{year}/prologue"
+    return f"{BASE}/{slug}/{year}"
+
+
+_pcs_race_list: list[tuple[str, str, str]] | None = None  # (slug, name, year)
+
+
+def _load_pcs_race_list(page) -> list[tuple[str, str, str]]:
+    """
+    Fetch and parse search_list26.js — the race index PCS uses for its search autocomplete.
+    Returns a list of (slug, name, year). Cached after the first fetch.
+    """
+    global _pcs_race_list
+    if _pcs_race_list is not None:
+        return _pcs_race_list
+    try:
+        response = page.goto(
+            "https://www.procyclingstats.com/search_list26.js",
+            wait_until="domcontentloaded", timeout=30_000,
+        )
+        if not response or response.status != 200:
+            _pcs_race_list = []
+            return []
+    except Exception:
+        _pcs_race_list = []
+        return []
+    content = page.inner_text("body")
+    races = []
+    for m in re.finditer(r'\["race","([^"]+)","([^"]+)",\d+\]', content):
+        slug_year = m.group(1)   # e.g. "giro-di-sardegna/2026"
+        name = m.group(2)
+        parts = slug_year.split("/")
+        if len(parts) == 2:
+            races.append((parts[0], name, parts[1]))
+    _pcs_race_list = races
+    return races
+
+
+def _race_tokens(name: str) -> set[str]:
+    STOP = {"de", "la", "le", "du", "di", "da", "van", "the", "a", "al", "en", "et"}
+    return set(re.sub(r"[^a-z0-9 ]", "", name.lower()).split()) - STOP
+
+
+def search_pcs_slug(page, race_name: str, year: str) -> str | None:
+    """
+    Find the PCS slug for a race by matching against PCS's own race index (search_list26.js).
+    Strips stage/prologue prefixes and uses token overlap to find the best match.
+    """
+    m = re.match(r"\d+\. etape af (.+)", race_name, re.IGNORECASE)
+    query = m.group(1).strip() if m else race_name
+    m = re.match(r"prologen til (.+)", query, re.IGNORECASE)
+    if m:
+        query = m.group(1).strip()
+
+    races = _load_pcs_race_list(page)
+    query_tokens = _race_tokens(query)
+    if not query_tokens:
+        return None
+
+    best_slug, best_score = None, 0
+    for slug, name, race_year in races:
+        if race_year != year:
+            continue
+        score = len(query_tokens & _race_tokens(name))
+        if score > best_score:
+            best_score = score
+            best_slug = slug
+
+    if best_score > 0:
+        return best_slug
+
+    # JS index found nothing — fall back to Google search
+    return _search_pcs_slug_via_google(page, query, year)
+
+
+def _search_pcs_slug_via_google(page, race_name: str, year: str) -> str | None:
+    """
+    Last-resort fallback: Google 'site:procyclingstats.com/race {race_name} {year}'
+    and extract the slug from the first matching result URL.
+    """
+    import urllib.parse
+    q = urllib.parse.quote_plus(f"site:procyclingstats.com/race {race_name} {year}")
+    try:
+        response = page.goto(f"https://www.google.com/search?q={q}",
+                             wait_until="domcontentloaded", timeout=30_000)
+        if not response or response.status != 200:
+            return None
+    except Exception:
+        return None
+    page.wait_for_timeout(1500)
+    for link in page.locator("a").all():
+        href = link.get_attribute("href") or ""
+        m = re.search(r"procyclingstats\.com/race/([^/&?]+)/" + year, href)
+        if m:
+            return m.group(1)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Name matching
 # ---------------------------------------------------------------------------
 
+PARTICLES = {"van", "de", "der", "den", "du", "del", "di", "da", "la", "le", "el", "los", "von", "af"}
+
+
 def normalize(name: str) -> set[str]:
     name = unicodedata.normalize("NFD", name)
     name = "".join(c for c in name if unicodedata.category(c) != "Mn")
-    return set(name.lower().split())
+    return {t for t in name.lower().split() if t not in PARTICLES}
 
 
 def names_match(predicted: str, found: str) -> bool:
@@ -161,16 +266,65 @@ def names_match(predicted: str, found: str) -> bool:
 # Winner extraction from PCS
 # ---------------------------------------------------------------------------
 
-def extract_winner(page) -> str | None:
-    for sel in WINNER_SELECTORS:
-        try:
-            el = page.locator(sel).first
-            if el.count() > 0:
-                text = el.inner_text(timeout=3_000).strip()
-                if text:
-                    return text
-        except Exception:
+def is_cancelled(page) -> bool:
+    """Returns True if the PCS page indicates the stage/race was cancelled."""
+    text = page.inner_text("body").lower()
+    return any(kw in text for kw in ("cancelled", "annulled", "neutralized", "stage cancelled"))
+
+
+def extract_winner(page) -> tuple[str | None, str | None]:
+    """
+    Returns (rider_winner, team_winner) from the stage result tables —
+    the non-Prev table(s). Standings tables always have a Prev column.
+    - rider_winner: from the first non-Prev table whose headers include 'Rider'
+    - team_winner: from the first non-Prev table whose headers include 'Team' but not 'Rider' (TTT team result)
+    """
+    rider_winner = None
+    team_winner = None
+    for table in page.locator("table.results").all():
+        headers = [th.inner_text().strip() for th in table.locator("thead th").all()]
+        if "Prev" in headers:
             continue
+        first_row = table.locator("tbody tr:first-child")
+        if "Rider" in headers and rider_winner is None:
+            link = first_row.locator("a").first
+            if link.count() > 0:
+                text = link.inner_text(timeout=3_000).strip()
+                if text:
+                    rider_winner = text
+        elif "Team" in headers and "Rider" not in headers and team_winner is None:
+            # Team-only table (TTT team result)
+            idx = headers.index("Team")
+            cells = first_row.locator("td").all()
+            if idx < len(cells):
+                text = cells[idx].inner_text(timeout=3_000).strip()
+                if text:
+                    team_winner = text
+    return rider_winner, team_winner
+
+
+def extract_winner_from_startlist(page, base_url: str) -> str | None:
+    """
+    Fallback: try the /statistics/start page which uses a plain <table> (not table.results)
+    with columns [#, Rider, Team, Time]. The first row is the race winner.
+    """
+    stats_url = base_url.rstrip("/") + "/statistics/start"
+    try:
+        response = page.goto(stats_url, wait_until="domcontentloaded", timeout=30_000)
+        if not response or response.status != 200:
+            return None
+    except Exception:
+        return None
+    page.wait_for_timeout(1500)
+    for table in page.locator("table").all():
+        headers = [th.inner_text().strip() for th in table.locator("th").all()]
+        if "Rider" not in headers:
+            continue
+        link = table.locator("tbody tr:first-child a").first
+        if link.count() > 0:
+            text = link.inner_text(timeout=3_000).strip()
+            if text:
+                return text
     return None
 
 
@@ -228,23 +382,76 @@ def main() -> None:
                 response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 status = response.status if response else None
                 if status == 404:
-                    print(f"  [WARNING] 404 for id={row['id']} url='{url}'")
+                    year = (row["date"] or "2026")[:4]
+                    print(f"  404 — searching PCS for '{race_name}'...")
+                    found_slug = search_pcs_slug(page, race_name, year)
+                    if found_slug:
+                        url = build_url_from_slug(race_name, found_slug, year)
+                        print(f"  Retrying with: {url}")
+                        try:
+                            response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                            if response and response.status == 404:
+                                print(f"  [WARNING] Still 404 after search for id={row['id']}")
+                                unmatched += 1
+                                time.sleep(2)
+                                continue
+                        except Exception as e:
+                            print(f"  [WARNING] Retry failed for id={row['id']}: {e}")
+                            unmatched += 1
+                            time.sleep(2)
+                            continue
+                    else:
+                        print(f"  [WARNING] No PCS result found via search for id={row['id']} race='{race_name}'")
+                        unmatched += 1
+                        time.sleep(2)
+                        continue
+            except Exception:
+                year = (row["date"] or "2026")[:4]
+                print(f"  Navigation failed — searching PCS for '{race_name}'...")
+                found_slug = search_pcs_slug(page, race_name, year)
+                if found_slug:
+                    url = build_url_from_slug(race_name, found_slug, year)
+                    print(f"  Retrying with: {url}")
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    except Exception as e:
+                        print(f"  [WARNING] Retry failed for id={row['id']}: {e}")
+                        unmatched += 1
+                        time.sleep(2)
+                        continue
+                else:
+                    print(f"  [WARNING] No PCS result found via search for id={row['id']} race='{race_name}'")
                     unmatched += 1
                     time.sleep(2)
                     continue
-            except Exception as e:
-                print(f"  [WARNING] Navigation failed for id={row['id']} url='{url}': {e}")
-                unmatched += 1
-                time.sleep(2)
-                continue
 
             # Give the page a moment to render the table
             page.wait_for_timeout(1500)
 
-            winner = extract_winner(page)
+            if is_cancelled(page):
+                print(f"  [CANCELLED] Stage/race was cancelled — skipping id={row['id']}")
+                skipped += 1
+                time.sleep(2)
+                continue
+
+            rider_winner, team_winner = extract_winner(page)
+            if rider_winner is None and team_winner is None:
+                print(f"  No result table found, trying /statistics/start fallback...")
+                rider_winner = extract_winner_from_startlist(page, url)
+
+            predicted = row["predicted_winner"] or ""
+            # Prefer whichever winner matches the prediction.
+            # Only fall back to team_winner if it explicitly matches (TTT team prediction).
+            # Default to rider_winner when neither matches, to avoid ITT/TTT confusion.
+            if rider_winner and names_match(predicted, rider_winner):
+                winner = rider_winner
+            elif team_winner and names_match(predicted, team_winner):
+                winner = team_winner
+            else:
+                winner = rider_winner
 
             if winner:
-                correct = 1 if names_match(row["predicted_winner"] or "", winner) else 0
+                correct = 1 if names_match(predicted, winner) else 0
                 status_str = "CORRECT" if correct else "WRONG"
                 print(f"  Found: {winner} → {status_str}")
                 if args.dry_run:
