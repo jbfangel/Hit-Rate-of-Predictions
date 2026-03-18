@@ -5,6 +5,9 @@ on:
     - cron: "0 22 * * *"  # 22:00 UTC = midnight Danish time (summer)
   workflow_dispatch:        # allow manual trigger from GitHub UI
 
+permissions:
+  contents: write
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
