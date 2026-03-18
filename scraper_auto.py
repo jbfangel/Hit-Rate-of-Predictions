@@ -9,6 +9,7 @@ Usage:
     python scraper_auto.py
 """
 
+import json
 import re
 import sqlite3
 import subprocess
@@ -176,17 +177,25 @@ def extract_article(page, url: str) -> dict | None:
 # Main
 # ---------------------------------------------------------------------------
 
+REPORT_PATH = Path(__file__).parent / "data" / "run_report.json"
+
+
 def main():
     conn = sqlite3.connect(DB_PATH)
+
+    report = {
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "new": [],
+        "updated": [],
+        "no_star": [],
+        "results_output": "",
+    }
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_context(user_agent=USER_AGENT, locale="da-DK").new_page()
 
         urls = collect_first_page_urls(page)
-
-        new_count = 0
-        updated_count = 0
 
         for url in urls:
             status = get_row_status(conn, url)
@@ -198,25 +207,41 @@ def main():
             if data is None:
                 continue
 
+            if not data["predicted_winner"]:
+                report["no_star"].append({"url": url, "race_name": data["race_name"]})
+
             if status == "new":
                 print(f"  [NEW] {data['race_name']} | {data['predicted_winner']}")
                 insert_prediction(conn, url, data["race_name"], data["date"], data["predicted_winner"])
-                new_count += 1
+                report["new"].append({"race_name": data["race_name"], "predicted_winner": data["predicted_winner"], "url": url})
             elif status == "pending":
                 print(f"  [UPDATE] {data['race_name']} | {data['predicted_winner']}")
                 update_pending(conn, url, data["race_name"], data["date"], data["predicted_winner"])
-                updated_count += 1
+                report["updated"].append({"race_name": data["race_name"], "predicted_winner": data["predicted_winner"], "url": url})
 
             time.sleep(1.0)
 
         browser.close()
 
     conn.close()
-    print(f"\nScrape done. {new_count} new, {updated_count} updated.")
+    print(f"\nScrape done. {len(report['new'])} new, {len(report['updated'])} updated.")
 
-    # Run results.py to match actual winners
+    # Run results.py and capture output
     print("\nRunning results.py ...")
-    subprocess.run([sys.executable, str(Path(__file__).parent / "results.py")], check=True)
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).parent / "results.py")],
+        capture_output=True, text=True,
+    )
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    report["results_output"] = result.stdout
+
+    REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    print(f"\nReport written to {REPORT_PATH}")
+
+    if result.returncode != 0:
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
