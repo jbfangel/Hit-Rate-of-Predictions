@@ -22,7 +22,7 @@ PENDING_WARNING_DAYS = 5  # warn if a prediction has been pending this many days
 
 def main():
     if not REPORT_PATH.exists():
-        print("No report file found.", file=sys.stderr)
+        print("No report file found — scraper likely crashed before writing report.")
         sys.exit(1)
 
     report = json.loads(REPORT_PATH.read_text(encoding="utf-8"))

@@ -107,6 +107,8 @@ def collect_first_page_urls(page) -> list[str]:
     print(f"Loading {AUTHOR_URL} ...")
     page.goto(AUTHOR_URL, wait_until="domcontentloaded")
     dismiss_cookie_banner(page)
+    page.wait_for_load_state("domcontentloaded")
+    page.wait_for_timeout(2000)
 
     hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
     seen = set()
