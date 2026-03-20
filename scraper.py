@@ -78,7 +78,7 @@ def collect_article_urls(page) -> list[str]:
     load_more_btn = page.locator("button", has_text=re.compile(r"Vis flere", re.IGNORECASE))
 
     prev_count = 0
-    max_clicks = 50  # safety cap
+    max_clicks = 200  # safety cap (loop already stops when button disappears)
     for click_num in range(max_clicks):
         if load_more_btn.count() == 0:
             print("  'Vis flere' button gone — all articles loaded.")
@@ -96,7 +96,14 @@ def collect_article_urls(page) -> list[str]:
             load_more_btn.scroll_into_view_if_needed(timeout=5_000)
             time.sleep(0.5)
             load_more_btn.click(timeout=10_000)
-            time.sleep(3.0)
+            # Wait for new articles to appear (up to 10s) rather than fixed sleep
+            try:
+                page.wait_for_function(
+                    f"document.querySelectorAll(\"a[href*='sport.tv2.dk/cykling/']\").length > {current_count}",
+                    timeout=10_000,
+                )
+            except Exception:
+                time.sleep(3.0)  # fallback if wait times out
         except Exception as e:
             print(f"  Load more stopped: {e}")
             break
@@ -117,6 +124,8 @@ def collect_article_urls(page) -> list[str]:
             continue
         # Must be on tv2.dk and look like an article (not a profile/tag page)
         if "sport.tv2.dk" not in href:
+            continue
+        if "/live/" in href:
             continue
         if href in seen:
             continue
@@ -194,12 +203,14 @@ def extract_article(page, url: str) -> dict | None:
         print(f"  [WARN] No title found at {url}")
         return None
 
-    # Filter: only "Axelgaards optakt til" articles
-    if "axelgaards optakt til" not in title.lower():
+    # Filter: "Axelgaards optakt til" articles OR titles starting with "Tour de France"
+    title_lower = title.lower()
+    if "axelgaards optakt til" in title_lower:
+        race_name = re.sub(r"(?i)^axelgaards optakt til\s*", "", title).strip()
+    elif title_lower.startswith("tour de france"):
+        race_name = title.strip()
+    else:
         return None
-
-    # Race name: strip "Axelgaards optakt til " prefix
-    race_name = re.sub(r"(?i)^axelgaards optakt til\s*", "", title).strip()
 
     # Date
     date = _extract_date(page)
@@ -254,13 +265,14 @@ def _extract_date(page) -> str | None:
 
 
 def _extract_predicted_winner(page) -> str | None:
-    """Find the line containing ⭐⭐⭐⭐⭐ and extract the rider name after it."""
+    """Find the line containing ⭐⭐⭐⭐⭐ and extract the rider name after it.
+    Falls back to ⭐⭐⭐ if no 5-star line is found."""
     full_text = page.locator("body").inner_text(timeout=10_000)
-    # Match lines like "⭐⭐⭐⭐⭐ Tadej Pogačar" or "⭐⭐⭐⭐⭐: Pogačar"
-    pattern = re.compile(r"⭐{5}\s*[:\-–]?\s*(.+)", re.MULTILINE)
-    match = pattern.search(full_text)
-    if match:
-        return match.group(1).strip()
+    for stars in (5, 3):
+        pattern = re.compile(rf"⭐{{{stars}}}\s*[:\-–]?\s*(.+)", re.MULTILINE)
+        match = pattern.search(full_text)
+        if match:
+            return match.group(1).strip()
     return None
 
 

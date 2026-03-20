@@ -361,10 +361,60 @@ def _normalize_quotes(name: str) -> str:
     return name.replace("\u2019", "'").replace("\u2018", "'")
 
 
+_SLUG_STOP = {"de", "la", "le", "du", "di", "da", "van", "the", "a", "al", "en", "et"}
+
+
+def _slug_tokens(name: str) -> frozenset[str]:
+    """Normalize a race name to a frozenset of meaningful tokens for fuzzy matching."""
+    name = unicodedata.normalize("NFD", name)
+    name = "".join(c for c in name if unicodedata.category(c) != "Mn")
+    name = re.sub(r"[^a-z0-9\s]", " ", name.lower())
+    return frozenset(name.split()) - _SLUG_STOP
+
+
+# Lazily built: maps frozenset(tokens) → (slug, token_count) for each SLUG_OVERRIDES key
+_slug_token_index: list[tuple[frozenset, str | None]] | None = None
+
+
+def _get_slug_token_index() -> list[tuple[frozenset, str | None]]:
+    global _slug_token_index
+    if _slug_token_index is None:
+        _slug_token_index = [
+            (_slug_tokens(key), slug)
+            for key, slug in SLUG_OVERRIDES.items()
+        ]
+    return _slug_token_index
+
+
+def _fuzzy_slug_lookup(name: str) -> tuple[bool, str | None]:
+    """
+    Check if all tokens of any SLUG_OVERRIDES key are a subset of the input name's tokens.
+    Among matches, picks the most specific (most tokens). Returns (found, slug).
+    """
+    input_tokens = _slug_tokens(name)
+    if not input_tokens:
+        return False, None
+    best_slug, best_count = None, 0
+    found = False
+    for key_tokens, slug in _get_slug_token_index():
+        if not key_tokens:
+            continue
+        if key_tokens <= input_tokens and len(key_tokens) > best_count:
+            best_count = len(key_tokens)
+            best_slug = slug
+            found = True
+    return found, best_slug
+
+
 def to_slug(name: str) -> str | None:
     normalized = _normalize_quotes(name)
     if normalized in SLUG_OVERRIDES:
         return SLUG_OVERRIDES[normalized]  # may be None → caller skips
+    # Fuzzy fallback: find the most specific SLUG_OVERRIDES key whose tokens
+    # are all contained in the input (handles subtitle variants like "– Porte du Hainaut")
+    found, slug = _fuzzy_slug_lookup(normalized)
+    if found:
+        return slug  # may be None → caller skips
     name = unicodedata.normalize("NFD", name)
     name = "".join(c for c in name if unicodedata.category(c) != "Mn")
     name = name.lower()
