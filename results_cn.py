@@ -204,24 +204,25 @@ def mark_cancelled(conn: sqlite3.Connection, row_id: int) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main(pages: int = 1, dry_run: bool = False) -> list[dict]:
+def main(pages: int = 1, dry_run: bool = False) -> dict:
     """
     Match and update results from Cyclingnews.
-    Returns list of unmatched rows (for GitHub Actions summary).
+    Returns a dict with keys: matched, cancelled, unmatched — each a list of row dicts
+    (matched/cancelled rows include 'actual_winner' and 'correct' fields).
     """
     conn = sqlite3.connect(DB_PATH)
     rows = fetch_null_rows(conn)
     if not rows:
         print("Nothing to do.")
         conn.close()
-        return []
+        return {"matched": [], "cancelled": [], "unmatched": []}
 
     print(f"Processing {len(rows)} unresolved rows against Cyclingnews ({pages} page(s))...")
     articles = fetch_articles(pages)
     print(f"Fetched {len(articles)} articles.")
 
-    matched = 0
-    cancelled = 0
+    matched_rows: list[dict] = []
+    cancelled_rows: list[dict] = []
     unmatched: list[dict] = []
 
     for row in rows:
@@ -239,7 +240,7 @@ def main(pages: int = 1, dry_run: bool = False) -> list[dict]:
             print(f"  [CANCELLED] {race_name}")
             if not dry_run:
                 mark_cancelled(conn, row["id"])
-            cancelled += 1
+            cancelled_rows.append(row)
             continue
 
         winner = extract_winner(cn_desc)
@@ -254,11 +255,11 @@ def main(pages: int = 1, dry_run: bool = False) -> list[dict]:
 
         if not dry_run:
             update_result(conn, row["id"], winner, correct)
-        matched += 1
+        matched_rows.append({**row, "actual_winner": winner, "correct": correct})
 
     conn.close()
-    print(f"\nDone. Matched: {matched}, Cancelled: {cancelled}, Unmatched: {len(unmatched)}.")
-    return unmatched
+    print(f"\nDone. Matched: {len(matched_rows)}, Cancelled: {len(cancelled_rows)}, Unmatched: {len(unmatched)}.")
+    return {"matched": matched_rows, "cancelled": cancelled_rows, "unmatched": unmatched}
 
 
 if __name__ == "__main__":
@@ -266,8 +267,8 @@ if __name__ == "__main__":
     parser.add_argument("--pages", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    unmatched = main(pages=args.pages, dry_run=args.dry_run)
-    if unmatched:
+    result = main(pages=args.pages, dry_run=args.dry_run)
+    if result["unmatched"]:
         print("\nUnmatched races (run results.py locally):")
-        for r in unmatched:
+        for r in result["unmatched"]:
             print(f"  - {r['race_name']} (predicted: {r['predicted_winner']})")

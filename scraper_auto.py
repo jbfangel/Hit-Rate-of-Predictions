@@ -231,8 +231,8 @@ def main():
 
     # Match results via Cyclingnews (no Cloudflare, plain HTTP)
     print("\nRunning results_cn.py ...")
-    unmatched = results_cn.main(pages=1)
-    report["unmatched"] = [r["race_name"] for r in unmatched]
+    cn_result = results_cn.main(pages=1)
+    report["unmatched"] = [r["race_name"] for r in cn_result["unmatched"]]
 
     REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nReport written to {REPORT_PATH}")
@@ -254,9 +254,23 @@ def main():
                 lines.append(f"- **{r['race_name']}** — predicted: {r['predicted_winner']}")
             lines.append("")
 
-        if unmatched:
-            lines.append("### ⚠️ Results not found — run `results.py` locally")
-            for r in unmatched:
+        if cn_result["matched"]:
+            lines.append("### Results matched")
+            for r in cn_result["matched"]:
+                symbol = "✅" if r["correct"] else "❌"
+                lines.append(f"- {symbol} **{r['race_name']}**: {r['actual_winner']} (predicted: {r['predicted_winner']})")
+            lines.append("")
+
+        if cn_result["cancelled"]:
+            lines.append("### Cancelled races")
+            for r in cn_result["cancelled"]:
+                lines.append(f"- 🚫 **{r['race_name']}**")
+            lines.append("")
+
+        if cn_result["unmatched"]:
+            lines.append("### ⚠️ Results not found")
+            lines.append("_These races have likely not been run yet. If they have, run `results.py` locally to find the result._")
+            for r in cn_result["unmatched"]:
                 lines.append(f"- **{r['race_name']}** — predicted: {r['predicted_winner']}")
             lines.append("")
         else:
