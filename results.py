@@ -1063,7 +1063,12 @@ def main() -> None:
                         skipped += 1
                         continue
                 else:
-                    # No result table → race hasn't been run yet
+                    # No result table → race hasn't been run yet (or Cloudflare blocked)
+                    try:
+                        snippet = page.inner_text("body", timeout=2_000)[:300].replace("\n", " ")
+                        print(f"  Page snippet: {snippet}")
+                    except Exception:
+                        pass
                     print(f"  No result table — race not yet run, skipping.")
                     skipped += 1
                     continue
