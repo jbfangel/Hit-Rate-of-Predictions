@@ -196,6 +196,18 @@ The winner is always the first capitalised words after the colon (using known na
 
 **`results.py` (PCS scraper) is kept** for local use — it still works perfectly on a residential IP and handles edge cases (jersey classifications, stage races, prologue) that Cyclingnews may not always cover.
 
+### Race classification in `results_cn.py`
+
+`race_context` (`one_day` / `stage` / `gc`) and `race_format` (`rr` / `itt` / `None`) are derived directly from the race name — same logic as `results.py` — and written to the DB alongside the result. This enables race-type statistics in the dashboard without needing to visit any external page.
+
+### GitHub Actions job summary
+
+`scraper_auto.py` writes a markdown summary to `$GITHUB_STEP_SUMMARY` after each run:
+- **New/updated predictions** scraped from TV2
+- **Results matched** — each race with ✅ (correct) or ❌ (wrong prediction)
+- **Cancelled races** — marked with 🚫
+- **Unmatched races** — flagged with ⚠️ and a note that the race has likely not been run yet, or to run `results.py` locally
+
 ## Open Questions
 - **TV2 pagination:** "Load more" button confirmed — need to verify it covers all 100+ articles in practice
 - **Article filtering:** Does `/cykling/` appear in all prediction article URLs, or do we need title keyword filtering?
