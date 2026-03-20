@@ -10,13 +10,14 @@ Usage:
 """
 
 import json
+import os
 import re
 import sqlite3
-import subprocess
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+import results_cn
 
 from playwright.sync_api import sync_playwright
 
@@ -228,22 +229,48 @@ def main():
     conn.close()
     print(f"\nScrape done. {len(report['new'])} new, {len(report['updated'])} updated.")
 
-    # Run results.py and capture output
-    print("\nRunning results.py ...")
-    result = subprocess.run(
-        [sys.executable, str(Path(__file__).parent / "results.py")],
-        capture_output=True, text=True,
-    )
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr, file=sys.stderr)
-    report["results_output"] = result.stdout
+    # Match results via Cyclingnews (no Cloudflare, plain HTTP)
+    print("\nRunning results_cn.py ...")
+    unmatched = results_cn.main(pages=1)
+    report["unmatched"] = [r["race_name"] for r in unmatched]
 
     REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\nReport written to {REPORT_PATH}")
 
-    if result.returncode != 0:
-        sys.exit(result.returncode)
+    # Write GitHub Actions job summary
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        lines = ["## Hit Rate of Predictions — Daily Run\n"]
+
+        if report["new"]:
+            lines.append("### New predictions scraped")
+            for r in report["new"]:
+                lines.append(f"- **{r['race_name']}** — predicted: {r['predicted_winner']}")
+            lines.append("")
+
+        if report["updated"]:
+            lines.append("### Updated predictions")
+            for r in report["updated"]:
+                lines.append(f"- **{r['race_name']}** — predicted: {r['predicted_winner']}")
+            lines.append("")
+
+        if unmatched:
+            lines.append("### ⚠️ Results not found — run `results.py` locally")
+            for r in unmatched:
+                lines.append(f"- **{r['race_name']}** — predicted: {r['predicted_winner']}")
+            lines.append("")
+        else:
+            lines.append("### ✅ All results matched automatically")
+            lines.append("")
+
+        if report["no_star"]:
+            lines.append("### ⚠️ Articles with no predicted winner (no ⭐⭐⭐⭐⭐ found)")
+            for r in report["no_star"]:
+                lines.append(f"- {r['race_name']} — {r['url']}")
+            lines.append("")
+
+        with open(summary_path, "w") as f:
+            f.write("\n".join(lines))
 
 
 if __name__ == "__main__":

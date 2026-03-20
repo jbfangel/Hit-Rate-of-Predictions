@@ -164,6 +164,38 @@ Feltet doesn't have a usable Emil Axelgaard author page — filtering must happe
 3. Pre-filter links where the slug or title contains "optakt"
 4. For each candidate, fetch the page and verify author == "Emil Axelgaard" before parsing predictions
 
+## Automation — CI Results Scraping Problem & Fix
+
+### Problem: ProCyclingStats blocked in GitHub Actions
+
+`results.py` uses **patchright** (a Playwright fork) to bypass Cloudflare on ProCyclingStats.com. This works fine when run locally on a residential IP. However, when run in GitHub Actions, the runner uses **Azure datacenter IPs**, which Cloudflare's bot detection specifically flags — even a fully headless patchright browser gets served a Managed Challenge page (HTTP 200, but body is "Performing security verification…" with no result table).
+
+Confirmed by adding a page-body diagnostic: every PCS page returned the Cloudflare challenge string instead of race content.
+
+**Sites investigated as alternatives:**
+| Site | CDN | Cloudflare? |
+|---|---|---|
+| ProCyclingStats.com | Cloudflare | ✅ Yes — Managed Challenge, blocks CI |
+| FirstCycling.com | Cloudflare | ✅ Yes — 403 immediately |
+| Feltet.dk | Fastly/Varnish | ❌ No — plain JSON API |
+| Cyclingnews.com | Fastly/Varnish | ❌ No — plain HTML |
+
+### Fix: Cyclingnews results scraper (`results_cn.py`)
+
+`https://www.cyclingnews.com/race-results/` lists recent race result articles. Each article link has an `aria-label` attribute in the format:
+
+```
+"Grand Prix de Denain: Alec Segaert toys with Hagenes and fends off peloton for extraordinary solo win"
+```
+
+The winner is always the first capitalised words after the colon (using known name particles like *van*, *de*, *del* to handle compound surnames). Cancelled races are detected by keywords ("cancelled", "neutralised", etc.) and marked in the DB.
+
+**`results_cn.py`** fetches this page with plain `requests` (no browser needed), matches race names against DB rows using token-based fuzzy matching, extracts winners, handles cancelled races, and returns unmatched races.
+
+**Integration:** `scraper_auto.py` calls `results_cn.main()` directly instead of `results.py`. Unmatched races are surfaced in the GitHub Actions job summary so they can be resolved locally with `results.py`.
+
+**`results.py` (PCS scraper) is kept** for local use — it still works perfectly on a residential IP and handles edge cases (jersey classifications, stage races, prologue) that Cyclingnews may not always cover.
+
 ## Open Questions
 - **TV2 pagination:** "Load more" button confirmed — need to verify it covers all 100+ articles in practice
 - **Article filtering:** Does `/cykling/` appear in all prediction article URLs, or do we need title keyword filtering?
