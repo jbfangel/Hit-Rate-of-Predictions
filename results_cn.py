@@ -173,6 +173,48 @@ def names_match(predicted: str, found: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Race classification
+# ---------------------------------------------------------------------------
+
+_ITT_KEYWORDS = ("enkeltstart", "chrono", "time trial", "itt", "contre-la-montre")
+_JERSEY_KEYWORDS = ("konkurrencen",)
+
+KNOWN_STAGE_RACES = {"Tour des Alpes-Maritimes", "Tour des Alpes"}
+
+
+def build_stage_races(conn: sqlite3.Connection) -> set[str]:
+    """Build set of base race names that have stage entries in the DB."""
+    stage_races: set[str] = KNOWN_STAGE_RACES.copy()
+    for (name,) in conn.execute("SELECT race_name FROM predictions"):
+        m = re.match(r"\d+\. etape af (.+)", name, re.IGNORECASE)
+        if m:
+            stage_races.add(m.group(1).strip())
+    return stage_races
+
+
+def get_race_context(race_name: str, stage_races: set[str]) -> str:
+    """Return 'stage', 'gc', or 'one_day'."""
+    if re.match(r"\d+\. etape af .+", race_name, re.IGNORECASE):
+        return "stage"
+    if re.match(r"prologen til .+", race_name, re.IGNORECASE):
+        return "stage"
+    if re.search(r"\w+konkurrencen\b", race_name, re.IGNORECASE):
+        return "gc"
+    if race_name in stage_races:
+        return "gc"
+    return "one_day"
+
+
+def get_race_format(race_name: str, race_context: str) -> str | None:
+    """Return 'itt', or 'rr'. GC races return None (no single format)."""
+    if race_context == "gc":
+        return None
+    if any(kw in race_name.lower() for kw in _ITT_KEYWORDS):
+        return "itt"
+    return "rr"
+
+
+# ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
 
@@ -184,18 +226,21 @@ def fetch_null_rows(conn: sqlite3.Connection) -> list[dict]:
     return [{"id": r[0], "race_name": r[1], "date": r[2], "predicted_winner": r[3]} for r in rows]
 
 
-def update_result(conn: sqlite3.Connection, row_id: int, actual_winner: str, correct: int) -> None:
+def update_result(conn: sqlite3.Connection, row_id: int, actual_winner: str, correct: int,
+                  race_context: str, race_format: str | None) -> None:
     conn.execute(
-        "UPDATE predictions SET actual_winner=?, correct=?, result_source=? WHERE id=?",
-        (actual_winner, correct, "cyclingnews.com", row_id),
+        "UPDATE predictions SET actual_winner=?, correct=?, result_source=?, "
+        "race_context=?, race_format=? WHERE id=?",
+        (actual_winner, correct, "cyclingnews.com", race_context, race_format, row_id),
     )
     conn.commit()
 
 
-def mark_cancelled(conn: sqlite3.Connection, row_id: int) -> None:
+def mark_cancelled(conn: sqlite3.Connection, row_id: int,
+                   race_context: str, race_format: str | None) -> None:
     conn.execute(
-        "UPDATE predictions SET cancelled=1, result_source=? WHERE id=?",
-        ("cyclingnews.com", row_id),
+        "UPDATE predictions SET cancelled=1, result_source=?, race_context=?, race_format=? WHERE id=?",
+        ("cyclingnews.com", race_context, race_format, row_id),
     )
     conn.commit()
 
@@ -217,6 +262,8 @@ def main(pages: int = 1, dry_run: bool = False) -> dict:
         conn.close()
         return {"matched": [], "cancelled": [], "unmatched": []}
 
+    stage_races = build_stage_races(conn)
+
     print(f"Processing {len(rows)} unresolved rows against Cyclingnews ({pages} page(s))...")
     articles = fetch_articles(pages)
     print(f"Fetched {len(articles)} articles.")
@@ -228,6 +275,8 @@ def main(pages: int = 1, dry_run: bool = False) -> dict:
     for row in rows:
         race_name = row["race_name"]
         predicted = row["predicted_winner"] or ""
+        race_context = get_race_context(race_name, stage_races)
+        race_format = get_race_format(race_name, race_context)
 
         article = find_article(race_name, articles)
         if article is None:
@@ -239,7 +288,7 @@ def main(pages: int = 1, dry_run: bool = False) -> dict:
         if is_cancelled(cn_desc):
             print(f"  [CANCELLED] {race_name}")
             if not dry_run:
-                mark_cancelled(conn, row["id"])
+                mark_cancelled(conn, row["id"], race_context, race_format)
             cancelled_rows.append(row)
             continue
 
@@ -254,7 +303,7 @@ def main(pages: int = 1, dry_run: bool = False) -> dict:
         print(f"  [{symbol}] {race_name}: {winner} (predicted: {predicted})")
 
         if not dry_run:
-            update_result(conn, row["id"], winner, correct)
+            update_result(conn, row["id"], winner, correct, race_context, race_format)
         matched_rows.append({**row, "actual_winner": winner, "correct": correct})
 
     conn.close()
