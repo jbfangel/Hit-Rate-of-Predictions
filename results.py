@@ -612,7 +612,7 @@ def _search_pcs_slug_via_google(page, race_name: str, year: str) -> str | None:
     page.wait_for_timeout(1500)
     for link in page.locator("a").all():
         href = link.get_attribute("href") or ""
-        m = re.search(r"procyclingstats\.com/race/([^/&?]+)/" + year, href)
+        m = re.search(r"procyclingstats\.com/race/([^/&?\\]+)/" + year, href)
         if m:
             return m.group(1)
     return None
@@ -932,7 +932,7 @@ def main() -> None:
             print(f"  URL: {url}")
 
             try:
-                response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                response = page.goto(url, wait_until="networkidle", timeout=30_000)
                 status = response.status if response else None
                 if status == 404 or (response and response.status >= 400):
                     year = (row["date"] or "2026")[:4]
@@ -954,7 +954,7 @@ def main() -> None:
                         url = build_url_from_slug(race_name, found_slug, year)
                         print(f"  Retrying with: {url}")
                         try:
-                            response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                            response = page.goto(url, wait_until="networkidle", timeout=30_000)
                             if response and response.status == 404:
                                 print(f"  [WARNING] Still 404 after search for id={row['id']}")
                                 unmatched += 1
@@ -1005,7 +1005,7 @@ def main() -> None:
 
             # Wait for result table to appear (faster than a fixed sleep)
             try:
-                page.wait_for_selector("table.results", timeout=5_000)
+                page.wait_for_selector("table.results", timeout=15_000)
             except Exception:
                 # Prologue URLs sometimes redirect silently to the main race page on PCS.
                 # If no result table found, retry with stage-0.
@@ -1014,7 +1014,7 @@ def main() -> None:
                     print(f"  No result on prologue page — trying stage-0: {stage0_url}")
                     try:
                         page.goto(stage0_url, wait_until="domcontentloaded", timeout=30_000)
-                        page.wait_for_selector("table.results", timeout=5_000)
+                        page.wait_for_selector("table.results", timeout=15_000)
                         url = stage0_url
                     except Exception:
                         pass
@@ -1024,7 +1024,7 @@ def main() -> None:
                     print(f"  No result table — trying {result_url}")
                     try:
                         page.goto(result_url, wait_until="domcontentloaded", timeout=30_000)
-                        page.wait_for_selector("table.results", timeout=5_000)
+                        page.wait_for_selector("table.results", timeout=15_000)
                         url = result_url
                     except Exception:
                         pass
