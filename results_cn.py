@@ -33,6 +33,12 @@ HEADERS = {
 NAME_PARTICLES = {"van", "de", "der", "den", "du", "di", "da", "del", "el", "la", "le", "af"}
 RACE_STOP = {"de", "la", "le", "du", "di", "da", "van", "the", "a", "al", "en", "et"}
 
+# Maps DB race names to the name CN uses in article titles, for cases where
+# token matching fails (e.g. "Milano-Sanremo" vs CN's "Milan-San Remo").
+CN_RACE_ALIASES: dict[str, str] = {
+    "Milano-Sanremo": "Milan-San Remo",
+}
+
 CANCELLATION_KEYWORDS = (
     "cancelled", "canceled", "neutralised", "neutralized",
     "abandoned", "annulled", "called off", "not held",
@@ -110,6 +116,7 @@ def find_article(race_name: str, articles: list[tuple[str, str]]) -> tuple[str, 
     """
     stage_num = _stage_number(race_name)
     base_name = _stage_base(race_name) if stage_num else None
+    lookup_name = CN_RACE_ALIASES.get(race_name, race_name)
 
     for cn_race, cn_desc in articles:
         if stage_num is not None:
@@ -120,7 +127,7 @@ def find_article(race_name: str, articles: list[tuple[str, str]]) -> tuple[str, 
                re.search(rf"\b{stage_num}(st|nd|rd|th)? stage\b", desc_lower):
                 return cn_race, cn_desc
         else:
-            if races_match(race_name, cn_race):
+            if races_match(lookup_name, cn_race):
                 return cn_race, cn_desc
 
     return None
