@@ -181,6 +181,7 @@ SLUG_OVERRIDES = {
     "Il Giro d'Abruzzo":                                            "giro-d-abruzzo",
     "Région Pays de la Loire Tour":                                 "region-pays-de-la-loire",
     "Volta Ciclista a Catalunya":                                   "volta-a-catalunya",
+    "Catalonien Rundt":                                             "volta-a-catalunya",
     "Baloise Belgium Tour":                                         "tour-of-belgium",
     "La Route d'Occitanie – CIC":                                   "la-route-d-occitanie",
     "Vuelta Asturias Julio Alvarez Mendo":                          "vuelta-asturias",
