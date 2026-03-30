@@ -120,6 +120,7 @@ SLUG_OVERRIDES = {
     "Danilith Nokere Koerse":                                       "nokere-koerse",
     "Volta NXT Classic":                                            "volta-nxt-classic",
     "Gent-Wevelgem In Flanders Fields":                             "gent-wevelgem",
+    "In Flanders Fields – From Middelkerke to Wevelgem":            "gent-wevelgem",
     "E3 Saxo Classic":                                              "e3-harelbeke",
     "Classic Brugge-De Panne":                                      "brugge-de-panne",
     "Scheldeprijs":                                                 "scheldeprijs",
