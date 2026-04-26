@@ -27,7 +27,7 @@ from pathlib import Path
 from patchright.sync_api import sync_playwright
 
 DB_PATH = Path(__file__).parent / "data" / "predictions.db"
-CAPTCHA_WAIT_TIMEOUT = 60  # seconds to wait for manual CAPTCHA solving
+CAPTCHA_WAIT_TIMEOUT = 15  # seconds to wait for manual CAPTCHA solving
 
 
 def wait_for_enter(timeout: int = CAPTCHA_WAIT_TIMEOUT) -> bool:
@@ -207,7 +207,7 @@ SLUG_OVERRIDES = {
     "BEMER Cyclassics":                                             "cyclassics-hamburg",
     "Flandern Rundt":                                               "ronde-van-vlaanderen",
     "Paris-Roubaix Hauts-de-France":                               "paris-roubaix",
-    "O Gran Camiño – The Historical Route":                         "o-gran-camino",
+    "O Gran Camiño – The Historical Route":                         "gran-camino",
     "NXT Classic":                                                  "volta-nxt-classic",
     "Classic Velox Adélie de Vitré":                               "route-adele-de-vitre",
     "Liège-Bastogne-Liège":                                        "liege-bastogne-liege",
@@ -1032,24 +1032,22 @@ def main() -> None:
                     except Exception:
                         pass
                 if not recovered:
-                    print(f"  Navigation failed — solve CAPTCHA in browser then press Enter (or wait {CAPTCHA_WAIT_TIMEOUT}s to skip)...")
-                    if wait_for_enter():
-                        recovered = True  # user solved CAPTCHA, page is loaded
-                    else:
-                        found_slug = search_pcs_slug(page, race_name, year)
-                        if found_slug:
-                            url = build_url_from_slug(race_name, found_slug, year)
-                            print(f"  Retrying with: {url}")
-                            try:
-                                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                                recovered = True
-                            except Exception as e:
-                                print(f"  [WARNING] Retry failed for id={row['id']}: {e}")
-                        if not recovered:
-                            print(f"  [WARNING] No PCS result found for id={row['id']} race='{race_name}'")
-                            unmatched += 1
-                            time.sleep(2)
-                            continue
+                    # First try searching for an alternative slug before bothering the user
+                    print(f"  Navigation failed — searching PCS for alternative slug...")
+                    found_slug = search_pcs_slug(page, race_name, year)
+                    if found_slug:
+                        url = build_url_from_slug(race_name, found_slug, year)
+                        print(f"  Retrying with: {url}")
+                        try:
+                            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                            recovered = True
+                        except Exception as e:
+                            print(f"  Retry also failed: {e}")
+                    if not recovered:
+                        print(f"  [WARNING] Could not find a working slug for id={row['id']} race='{race_name}'")
+                        unmatched += 1
+                        time.sleep(2)
+                        continue
 
             # Detect Cloudflare challenge (status 200 but challenge page — goto doesn't throw)
             if is_cloudflare_challenge(page):
