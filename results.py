@@ -453,6 +453,73 @@ def to_slug(name: str) -> str | None:
     return name
 
 
+def slug_candidates(base_name: str) -> list[str]:
+    """
+    Generate candidate PCS slugs for a race base name, from most to least specific.
+    PCS slugs are almost always a substring of the English race name, so we try:
+      1. Full name (already tried by caller, but included for completeness)
+      2. Subtitle stripped (everything after " – " or " / ")
+      3. Leading word dropped (handles "O Gran Camiño" → "gran-camino")
+      4. Progressive drops from the end (up to 3 words)
+    Danish race names won't benefit from this — they need SLUG_OVERRIDES entries.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def _add(name: str) -> None:
+        s = to_slug(_clean_base_name(name))
+        if s and s not in seen:
+            seen.add(s)
+            result.append(s)
+
+    _add(base_name)
+
+    # Strip subtitle after common separators
+    for sep in (" – ", " - ", " / "):
+        if sep in base_name:
+            _add(base_name.split(sep)[0].strip())
+            break
+
+    words = base_name.split()
+
+    # Drop leading word: "O Gran Camiño" → "Gran Camiño"
+    if len(words) > 2:
+        _add(" ".join(words[1:]))
+
+    # Progressive drops from the end
+    for i in range(len(words) - 1, max(len(words) - 4, 1), -1):
+        _add(" ".join(words[:i]))
+
+    return result
+
+
+def _try_slug_candidates(page, race_name: str, current_slug: str | None, year: str) -> tuple[str | None, str | None]:
+    """
+    Try slug variations before falling back to the expensive PCS index search.
+    Returns (url, working_slug) if a candidate loads successfully, else (None, None).
+    """
+    m = re.match(r"\d+\. etape af (.+)", race_name, re.IGNORECASE)
+    base = m.group(1).strip() if m else race_name
+    m2 = re.match(r"prologen til (.+)", base, re.IGNORECASE)
+    if m2:
+        base = m2.group(1).strip()
+    base = _clean_base_name(base)
+
+    for candidate in slug_candidates(base):
+        if candidate == current_slug:
+            continue
+        candidate_url = build_url_from_slug(race_name, candidate, year)
+        print(f"  Trying slug variant: {candidate_url}")
+        try:
+            resp = page.goto(candidate_url, wait_until="domcontentloaded", timeout=20_000)
+            if resp and resp.status < 400:
+                _persist_slug_override(base, candidate)
+                return candidate_url, candidate
+        except Exception:
+            continue
+    return None, None
+
+
 def _resolve_year(base_name: str, date: str) -> str:
     """
     Determine the race year from the article date, with overrides.
@@ -996,28 +1063,36 @@ def main() -> None:
                         except Exception:
                             pass
                     if status >= 400:
-                        print(f"  {status} — searching PCS for '{race_name}'...")
-                    found_slug = search_pcs_slug(page, race_name, year)
-                    if found_slug:
-                        url = build_url_from_slug(race_name, found_slug, year)
-                        print(f"  Retrying with: {url}")
-                        try:
-                            response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                            if response and response.status == 404:
-                                print(f"  [WARNING] Still 404 after search for id={row['id']}")
+                        # Try slug variants first (fast, no index fetch needed)
+                        alt_url, alt_slug = _try_slug_candidates(page, race_name, slug, year)
+                        if alt_url:
+                            url = alt_url
+                            slug = alt_slug
+                            status = 200
+                    if status >= 400:
+                        # Slug variants exhausted — fall back to PCS index search
+                        print(f"  {status} — searching PCS index for '{race_name}'...")
+                        found_slug = search_pcs_slug(page, race_name, year)
+                        if found_slug:
+                            url = build_url_from_slug(race_name, found_slug, year)
+                            print(f"  Retrying with: {url}")
+                            try:
+                                response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                                if response and response.status == 404:
+                                    print(f"  [WARNING] Still 404 after search for id={row['id']}")
+                                    unmatched += 1
+                                    time.sleep(2)
+                                    continue
+                            except Exception as e:
+                                print(f"  [WARNING] Retry failed for id={row['id']}: {e}")
                                 unmatched += 1
                                 time.sleep(2)
                                 continue
-                        except Exception as e:
-                            print(f"  [WARNING] Retry failed for id={row['id']}: {e}")
+                        else:
+                            print(f"  [WARNING] No PCS result found via search for id={row['id']} race='{race_name}'")
                             unmatched += 1
                             time.sleep(2)
                             continue
-                    else:
-                        print(f"  [WARNING] No PCS result found via search for id={row['id']} race='{race_name}'")
-                        unmatched += 1
-                        time.sleep(2)
-                        continue
             except Exception:
                 year = (row["date"] or "2026")[:4]
                 recovered = False
@@ -1032,8 +1107,15 @@ def main() -> None:
                     except Exception:
                         pass
                 if not recovered:
-                    # First try searching for an alternative slug before bothering the user
-                    print(f"  Navigation failed — searching PCS for alternative slug...")
+                    # Try slug variants first (subtitle strip, word drops)
+                    print(f"  Navigation failed — trying slug variants...")
+                    alt_url, _ = _try_slug_candidates(page, race_name, slug, year)
+                    if alt_url:
+                        url = alt_url
+                        recovered = True
+                if not recovered:
+                    # Slug variants exhausted — fall back to PCS index search
+                    print(f"  Searching PCS index for '{race_name}'...")
                     found_slug = search_pcs_slug(page, race_name, year)
                     if found_slug:
                         url = build_url_from_slug(race_name, found_slug, year)
@@ -1043,11 +1125,11 @@ def main() -> None:
                             recovered = True
                         except Exception as e:
                             print(f"  Retry also failed: {e}")
-                    if not recovered:
-                        print(f"  [WARNING] Could not find a working slug for id={row['id']} race='{race_name}'")
-                        unmatched += 1
-                        time.sleep(2)
-                        continue
+                if not recovered:
+                    print(f"  [WARNING] Could not find a working slug for id={row['id']} race='{race_name}'")
+                    unmatched += 1
+                    time.sleep(2)
+                    continue
 
             # Detect Cloudflare challenge (status 200 but challenge page — goto doesn't throw)
             if is_cloudflare_challenge(page):
