@@ -215,7 +215,7 @@ display["Date"] = display["date"].dt.strftime("%Y-%m-%d").fillna("")
 def normalize_name(name):
     """Convert PCS format 'LASTNAME Firstname' to 'Firstname Lastname'."""
     if not name or pd.isna(name):
-        return name or ""
+        return ""
     words = name.split()
     # Find where the all-caps lastname words end
     split_idx = 0
@@ -239,8 +239,10 @@ def cap_first(name: str) -> str:
 
 
 def make_link(text, href):
-    if not text or pd.isna(text) or not href or pd.isna(href):
-        return text or ""
+    if not text or pd.isna(text):
+        return ""
+    if not href or pd.isna(href):
+        return str(text)
     return f'<a href="{href}" target="_blank">{text}</a>'
 
 
