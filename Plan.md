@@ -5,6 +5,16 @@ Build a tool that tracks Emil Axelgaard's men's cycling predictions and calculat
 
 Project folder: `~/Desktop/Projects/Hit Rate of Predictions/`
 
+## Session Log
+
+### 2026-04-26
+- **Fixed NaN rendering in dashboard** — `normalize_name` and `make_link` in `dashboard.py` both had a subtle Python bug where `float('nan') or ""` returns NaN (NaN is truthy), causing NULL `actual_winner` values to render as `"nan"` in the HTML table. Fixed both to return `""` directly.
+- **Added Cloudflare CAPTCHA detection to `results.py`** — when PCS serves a managed challenge (status 200, no exception), the old code would waste 30+ seconds waiting for `table.results` to appear. Added `is_cloudflare_challenge()` that checks the page title/body immediately after `goto()` and prompts the user to solve it (60s timeout, up from 10s) or skips fast.
+- **Added missing slug overrides** — `Flandern Rundt`, `Paris-Roubaix Hauts-de-France`, `O Gran Camiño – The Historical Route`, `NXT Classic`, `Classic Velox Adélie de Vitré`, `Liège-Bastogne-Liège`.
+- **Auto-persist newly discovered slugs** — added `_persist_slug_override()`: when `search_pcs_slug` finds a working slug via the PCS race index or Google fallback, it now writes the slug back into `SLUG_OVERRIDES` in `results.py` so future runs skip the search entirely.
+
+---
+
 ## Key Findings
 - **TV2.dk** author page: `https://sport.tv2.dk/profil/emil-axels` — JS-rendered, needs headless browser
 - **Feltet.dk** author page: `https://feltet.dk/author/emil-axelgaard/` — JS-rendered, needs headless browser

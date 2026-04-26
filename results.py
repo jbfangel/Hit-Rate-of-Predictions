@@ -27,7 +27,7 @@ from pathlib import Path
 from patchright.sync_api import sync_playwright
 
 DB_PATH = Path(__file__).parent / "data" / "predictions.db"
-CAPTCHA_WAIT_TIMEOUT = 10  # seconds to wait for manual CAPTCHA solving
+CAPTCHA_WAIT_TIMEOUT = 60  # seconds to wait for manual CAPTCHA solving
 
 
 def wait_for_enter(timeout: int = CAPTCHA_WAIT_TIMEOUT) -> bool:
@@ -205,6 +205,12 @@ SLUG_OVERRIDES = {
     "Bretagne Classic - Ouest-France":                              "bretagne-classic",
     "Donostia San Sebastian Klasikoa (Clasica San Sebastian)":      "san-sebastian",
     "BEMER Cyclassics":                                             "cyclassics-hamburg",
+    "Flandern Rundt":                                               "ronde-van-vlaanderen",
+    "Paris-Roubaix Hauts-de-France":                               "paris-roubaix",
+    "O Gran Camiño – The Historical Route":                         "o-gran-camino",
+    "NXT Classic":                                                  "volta-nxt-classic",
+    "Classic Velox Adélie de Vitré":                               "route-adele-de-vitre",
+    "Liège-Bastogne-Liège":                                        "liege-bastogne-liege",
 
     # Stage races (additional base name variants)
     "Tour de Limousin":                                             "tour-du-limousin",
@@ -376,6 +382,28 @@ def _slug_tokens(name: str) -> frozenset[str]:
 
 # Lazily built: maps frozenset(tokens) → (slug, token_count) for each SLUG_OVERRIDES key
 _slug_token_index: list[tuple[frozenset, str | None]] | None = None
+
+
+def _persist_slug_override(race_name: str, slug: str) -> None:
+    """Add a newly discovered slug to SLUG_OVERRIDES in memory and write it to this source file."""
+    global _slug_token_index
+    if race_name in SLUG_OVERRIDES:
+        return
+    SLUG_OVERRIDES[race_name] = slug
+    _slug_token_index = None  # invalidate token index cache
+
+    try:
+        source_path = Path(__file__)
+        text = source_path.read_text(encoding="utf-8")
+        marker = "    # Championships / special (skip)"
+        if marker not in text:
+            return
+        entry = f'    "{race_name}": "{slug}",\n'
+        text = text.replace(marker, entry + marker, 1)
+        source_path.write_text(text, encoding="utf-8")
+        print(f"  [slug] Persisted new override: {race_name!r} → {slug!r}")
+    except Exception as e:
+        print(f"  [slug] Could not persist override: {e}")
 
 
 def _get_slug_token_index() -> list[tuple[frozenset, str | None]]:
@@ -591,10 +619,14 @@ def search_pcs_slug(page, race_name: str, year: str) -> str | None:
             best_slug = slug
 
     if best_score > 0:
+        _persist_slug_override(query, best_slug)
         return best_slug
 
     # JS index found nothing — fall back to Google search
-    return _search_pcs_slug_via_google(page, query, year)
+    result = _search_pcs_slug_via_google(page, query, year)
+    if result:
+        _persist_slug_override(query, result)
+    return result
 
 
 def _search_pcs_slug_via_google(page, race_name: str, year: str) -> str | None:
@@ -749,6 +781,20 @@ def extract_jersey_winner(page, jersey_type: str) -> str | None:
                     if link.count() > 0:
                         return link.inner_text(timeout=3_000).strip()
     return None
+
+
+def is_cloudflare_challenge(page) -> bool:
+    """Detect a Cloudflare managed challenge page (status 200 but no race content)."""
+    try:
+        if "just a moment" in page.title().lower():
+            return True
+    except Exception:
+        pass
+    try:
+        snippet = page.inner_text("body", timeout=1_000)[:400].lower()
+        return "security verification" in snippet or "checking your browser" in snippet
+    except Exception:
+        return False
 
 
 def is_cancelled(page) -> bool:
@@ -1004,6 +1050,14 @@ def main() -> None:
                             unmatched += 1
                             time.sleep(2)
                             continue
+
+            # Detect Cloudflare challenge (status 200 but challenge page — goto doesn't throw)
+            if is_cloudflare_challenge(page):
+                print(f"  Cloudflare challenge detected — solve in browser then press Enter (or wait {CAPTCHA_WAIT_TIMEOUT}s to skip)...")
+                if not wait_for_enter():
+                    print(f"  Skipping (CAPTCHA not solved in time)")
+                    unmatched += 1
+                    continue
 
             # Wait for result table to appear (faster than a fixed sleep)
             try:
